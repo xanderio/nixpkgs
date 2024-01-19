@@ -89,6 +89,13 @@ in {
           dbFile = pkgs.writeText "dbsecret" "we2quaeZ";
           jwsFile = pkgs.runCommand "oidcKeyBase" {} "${pkgs.openssl}/bin/openssl genrsa 2048 > $out";
         };
+
+        sidekiq.workers = {
+          elastic.queues = [
+            { name = "elastic_association_indexer"; priority = 1; }
+            { name = "elastic_commit_indexer"; priority = 1; }
+          ];
+        };
       };
     };
   };
@@ -172,7 +179,8 @@ in {
         gitlab.wait_for_unit("gitlab-mailroom.service")
         gitlab.wait_for_unit("gitlab.service")
         gitlab.wait_for_unit("gitlab-pages.service")
-        gitlab.wait_for_unit("gitlab-sidekiq.service")
+        gitlab.wait_for_unit("gitlab-sidekiq-default.service")
+        gitlab.wait_for_unit("gitlab-sidekiq-elastic.service")
         gitlab.wait_for_file("${nodes.gitlab.services.gitlab.statePath}/tmp/sockets/gitlab.socket")
         gitlab.wait_until_succeeds("curl -sSf http://gitlab/users/sign_in")
       '';

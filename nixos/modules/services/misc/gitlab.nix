@@ -87,6 +87,11 @@ let
   # Redis configuration file
   resqueYml = pkgs.writeText "resque.yml" (builtins.toJSON redisConfig);
 
+  sidekiqConfig = name: config:
+  pkgs.writeText "sidekiq-${name}.json" (builtins.toJSON {
+    ":queues" = map (queue: [queue.name queue.priority]) config.queues;
+  });
+
   gitlabConfig = {
     # These are the default settings from config/gitlab.example.yml
     production = flip recursiveUpdate cfg.extraConfig {
@@ -944,6 +949,26 @@ in {
         '';
       };
 
+      sidekiq.workers = mkOption {
+        type = with types; attrsOf (submodule {
+          options = {
+            queues = mkOption {
+              type = listOf (submodule {
+                options = {
+                  name = mkOption {
+                    type = str;
+                  };
+                  priority = mkOption {
+                    type = ints.between 1 5;
+                  };
+                };
+              });
+            };
+          };
+        });
+        default = {};
+      };
+
       logrotate = {
         enable = mkOption {
           type = types.bool;
@@ -1057,7 +1082,7 @@ in {
     };
   };
 
-  config = mkIf cfg.enable {
+  config = mkIf cfg.enable (lib.mkMerge [{
     warnings = [
       (mkIf
         (cfg.registry.enable && versionAtLeast (getVersion cfg.packages.gitlab) "16.0.0" && cfg.registry.package == pkgs.docker-distribution)
@@ -1413,51 +1438,6 @@ in {
       };
     };
 
-    systemd.services.gitlab-sidekiq = {
-      after = [
-        "network.target"
-        "redis-gitlab.service"
-        "postgresql.service"
-        "gitlab-config.service"
-        "gitlab-db-config.service"
-      ];
-      bindsTo = [
-        "redis-gitlab.service"
-        "gitlab-config.service"
-        "gitlab-db-config.service"
-      ] ++ optional (cfg.databaseHost == "") "postgresql.service";
-      wantedBy = [ "gitlab.target" ];
-      partOf = [ "gitlab.target" ];
-      environment = gitlabEnv // (optionalAttrs cfg.sidekiq.memoryKiller.enable {
-        SIDEKIQ_MEMORY_KILLER_MAX_RSS = cfg.sidekiq.memoryKiller.maxMemory;
-        SIDEKIQ_MEMORY_KILLER_GRACE_TIME = cfg.sidekiq.memoryKiller.graceTime;
-        SIDEKIQ_MEMORY_KILLER_SHUTDOWN_WAIT = cfg.sidekiq.memoryKiller.shutdownWait;
-      });
-      path = with pkgs; [
-        postgresqlPackage
-        git
-        ruby
-        openssh
-        nodejs
-        gnupg
-
-        # Needed for GitLab project imports
-        gnutar
-        gzip
-
-        procps # Sidekiq MemoryKiller
-      ];
-      serviceConfig = {
-        Type = "simple";
-        User = cfg.user;
-        Group = cfg.group;
-        TimeoutSec = "infinity";
-        Restart = "always";
-        WorkingDirectory = "${cfg.packages.gitlab}/share/gitlab";
-        ExecStart="${cfg.packages.gitlab.rubyEnv}/bin/sidekiq -C \"${cfg.packages.gitlab}/share/gitlab/config/sidekiq_queues.yml\" -e production";
-      };
-    };
-
     systemd.services.gitaly = {
       after = [ "network.target" "gitlab-config.service" ];
       bindsTo = [ "gitlab-config.service" ];
@@ -1663,7 +1643,71 @@ in {
       };
     };
 
-  };
+  }
+  {
+    services.gitlab.sidekiq.workers.default.queues = let
+      queues = map (queue: {
+        name = builtins.elemAt queue 0;
+        priority = builtins.elemAt queue 1;
+      }) cfg.packages.gitlab.sidekiqConfig.":queues";
+
+      noneDefaultQueues = lib.filterAttrs (name: _: name != "default") cfg.sidekiq.workers;
+
+      other = lib.flatten (lib.mapAttrsToList (_: value: map(q: q.name) value.queues) noneDefaultQueues);
+    in
+    lib.filter (queue: lib.any (name: name != queue.name) other) queues;
+
+    systemd.services = let
+      mkSidekiqService = name: config:
+      {
+        name = "gitlab-sidekiq-${name}";
+        value = {
+          after = [
+            "network.target"
+            "redis-gitlab.service"
+            "postgresql.service"
+            "gitlab-config.service"
+            "gitlab-db-config.service"
+          ];
+          bindsTo = [
+            "redis-gitlab.service"
+            "gitlab-config.service"
+            "gitlab-db-config.service"
+          ] ++ optional (cfg.databaseHost == "") "postgresql.service";
+          wantedBy = [ "gitlab.target" ];
+          partOf = [ "gitlab.target" ];
+          environment = gitlabEnv // (optionalAttrs cfg.sidekiq.memoryKiller.enable {
+            SIDEKIQ_MEMORY_KILLER_MAX_RSS = cfg.sidekiq.memoryKiller.maxMemory;
+            SIDEKIQ_MEMORY_KILLER_GRACE_TIME = cfg.sidekiq.memoryKiller.graceTime;
+            SIDEKIQ_MEMORY_KILLER_SHUTDOWN_WAIT = cfg.sidekiq.memoryKiller.shutdownWait;
+          });
+          path = with pkgs; [
+            postgresqlPackage
+            git
+            ruby
+            openssh
+            nodejs
+            gnupg
+
+            # Needed for GitLab project imports
+            gnutar
+            gzip
+
+            procps # Sidekiq MemoryKiller
+          ];
+          serviceConfig = {
+            Type = "simple";
+            User = cfg.user;
+            Group = cfg.group;
+            TimeoutSec = "infinity";
+            Restart = "always";
+            WorkingDirectory = "${cfg.packages.gitlab}/share/gitlab";
+            ExecStart="${cfg.packages.gitlab.rubyEnv}/bin/sidekiq -C ${sidekiqConfig name config} -e production";
+          };
+      };
+    };
+    in  lib.mapAttrs' mkSidekiqService cfg.sidekiq.workers;
+  }]);
 
   meta.doc = ./gitlab.md;
   meta.maintainers = teams.gitlab.members;

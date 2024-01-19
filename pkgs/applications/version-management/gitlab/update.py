@@ -1,5 +1,5 @@
 #!/usr/bin/env nix-shell
-#! nix-shell -I nixpkgs=../../../.. -i python3 -p bundix bundler nix-update nix nix-universal-prefetch python3 python3Packages.requests python3Packages.click python3Packages.click-log python3Packages.packaging prefetch-yarn-deps git
+#! nix-shell -I nixpkgs=../../../.. -i python3 -p bundix bundler nix-update nix nix-universal-prefetch python3 python3Packages.requests python3Packages.click python3Packages.click-log python3Packages.packaging python3Packages.pyyaml prefetch-yarn-deps git
 
 import click
 import click_log
@@ -9,6 +9,7 @@ import subprocess
 import json
 import pathlib
 import tempfile
+import yaml
 from packaging.version import Version
 from typing import Iterable
 
@@ -230,6 +231,30 @@ def update_rubyenv():
     subprocess.check_output(["rm", "-rf", "vendor", "gems"], cwd=rubyenv_dir)
 
 
+@cli.command("update-default-sidekiq-config")
+def update_default_sidekiq_config():
+    """Update gitlab default sidekiq config"""
+
+    # load version from data.json
+    data = _get_data_json()
+    version = data["version"]
+
+    sidekiq_default = subprocess.check_output(
+        [
+            "sh",
+            "-c",
+            f"curl -L https://gitlab.com/gitlab-org/gitlab/-/raw/v{version}-ee/config/sidekiq_queues.yml?ref_type=tags&inline=false",
+        ]
+    )
+
+    data = yaml.safe_load(sidekiq_default)
+
+    config_file_path = pathlib.Path(__file__).parent / "sidekiq_queues.json"
+    with open(config_file_path.as_posix(), "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+
+
 @cli.command("update-gitaly")
 def update_gitaly():
     """Update gitaly"""
@@ -336,6 +361,7 @@ def update_all(ctx, rev: str, commit: bool):
     ctx.invoke(update_gitlab_shell)
     ctx.invoke(update_gitlab_workhorse)
     ctx.invoke(update_gitlab_elasticsearch_indexer)
+    ctx.invoke(update_default_sidekiq_config)
     if commit:
         commit_gitlab(
             old_data_json["version"], new_data_json["version"], new_data_json["rev"]
