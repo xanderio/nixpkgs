@@ -3,25 +3,33 @@
   rustPlatform,
   versionCheckHook,
   stalwart-mail,
+  dasel,
 }:
 
-rustPlatform.buildRustPackage rec {
+rustPlatform.buildRustPackage {
+  inherit (stalwart-mail) src version cargoDeps;
   pname = "stalwart-cli";
-  version = stalwart-mail.version;
-  src = stalwart-mail.src;
 
-  buildAndTestSubdir = "crates/cli";
-  cargoHash = "sha256-9gqk26qCic1N8LHXLX3fWyk/oQr3QifbmPzAEWL6ZHo=";
+  cargoBuildFlags = [
+    "--package"
+    "stalwart-cli"
+  ];
+  cargoTestFlags = [
+    "--package"
+    "stalwart-cli"
+  ];
+
+  postPatch = ''
+    # upstream forgot to dump this, let's patch this so version check passes
+    ${lib.getExe dasel} put -f crates/cli/Cargo.toml -v ${stalwart-mail.version} -s 'package.version'
+  '';
 
   doInstallCheck = true;
   nativeInstallCheckInputs = [ versionCheckHook ];
   versionCheckProgramArg = [ "--version" ];
 
-  meta = {
+  meta = stalwart-mail.meta // {
     description = "Stalwart Mail Server CLI";
-    homepage = "https://github.com/stalwartlabs/mail-server";
-    changelog = "https://github.com/stalwartlabs/mail-server/blob/v${version}/CHANGELOG.md";
-    license = lib.licenses.agpl3Only;
     mainProgram = "stalwart-cli";
     maintainers = with lib.maintainers; [
       giomf
