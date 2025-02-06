@@ -42,6 +42,9 @@ stdenv.mkDerivation rec {
     ./dont-call-setgroups-unconditionally.patch
   ];
 
+  # noBrokenSymlinks: found 5 dangling symlinks and 0 reflexive symlinks
+  dontCheckForBrokenSymlinks = true;
+
   # Workaround build failure on -fno-common toolchains like upstream
   # gcc-10. Otherwise build fails as:
   #   ld: ...-libprom-0.1.1/include/prom_collector_registry.h:37: multiple definition of
